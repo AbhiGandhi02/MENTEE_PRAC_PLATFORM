@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import Header from '@/components/Header';
-import { Plus, Code, Calculator, FileText, AlertCircle, Globe } from 'lucide-react';
+import { Plus, Code, Calculator, FileText, AlertCircle, Globe, ArrowRight } from 'lucide-react';
 
 export default function AdminCreateQuestionPage() {
   const router = useRouter();
@@ -43,13 +43,13 @@ export default function AdminCreateQuestionPage() {
         {/* Header */}
         <div className="mb-8">
           <button
-            onClick={() => router.push('/admin/questions')}
+            onClick={() => router.push('/admin')} // Link back to main admin dashboard
             className="text-purple-600 hover:text-purple-700 font-medium mb-4"
           >
-            ← Back to Questions
+            ← Back to Admin Dashboard
           </button>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Create New Question</h1>
-          <p className="text-gray-600">Add a new coding or math question for students</p>
+          <p className="text-gray-600">Choose the type of question you want to add</p>
         </div>
 
         {/* Info Box */}
@@ -59,7 +59,7 @@ export default function AdminCreateQuestionPage() {
             <div>
               <h3 className="font-semibold text-blue-900 mb-2">Question Creation Instructions</h3>
               <p className="text-sm text-blue-800 mb-3">
-                This page requires a comprehensive form for creating questions. You can add questions directly to Firestore using the Firebase Console for now.
+                 Choose a question type below to open the specific creation form. You can also add questions directly to Firestore using the Firebase Console for now.
               </p>
               <p className="text-sm text-blue-800 font-medium">
                 Collection: <code className="bg-blue-100 px-2 py-1 rounded">questions</code>
@@ -70,66 +70,92 @@ export default function AdminCreateQuestionPage() {
 
         {/* Question Types */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          {/* ICP Coding */}
-          <div className="bg-white rounded-xl border-2 border-gray-200 p-6">
-            <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center mb-4">
-              <Code className="w-6 h-6 text-white" />
+          <div className="bg-white rounded-xl border-2 border-gray-200 p-6 flex flex-col justify-between">
+            <div> 
+              <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center mb-4">
+                <Code className="w-6 h-6 text-white" />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900 mb-2">ICP Coding Question</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Create coding problems with test cases for Python, JavaScript, C++, or Java
+              </p>
+              <div className="text-xs text-gray-500 space-y-1 mb-4">
+                <p>• Problem description</p>
+                <p>• Input/Output format</p>
+                <p>• Constraints</p>
+                <p>• Example cases with explanations</p>
+                <p>• 20 hidden test cases (required)</p>
+                <p>• Optional starter code templates</p>
+              </div>
             </div>
-            <h3 className="text-lg font-bold text-gray-900 mb-2">ICP Coding Question</h3>
-            <p className="text-sm text-gray-600 mb-4">
-              Create coding problems with test cases for Python, JavaScript, C++, or Java
-            </p>
-            <div className="text-xs text-gray-500 space-y-1">
-              <p>• Problem description</p>
-              <p>• Input/Output format</p>
-              <p>• Constraints</p>
-              <p>• Example cases with explanations</p>
-              <p>• 20 hidden test cases (required)</p>
-              <p>• Optional starter code templates</p>
-            </div>
+            <button
+              onClick={() => router.push('/admin/questions/create/icp')}
+              className="mt-auto w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+            >
+              <span>Create ICP</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
           </div>
 
           {/* Maths MCQ */}
-          <div className="bg-white rounded-xl border-2 border-gray-200 p-6">
-            <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl flex items-center justify-center mb-4">
-              <Calculator className="w-6 h-6 text-white" />
+          <div className="bg-white rounded-xl border-2 border-gray-200 p-6 flex flex-col justify-between">
+             <div> 
+              <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl flex items-center justify-center mb-4">
+                <Calculator className="w-6 h-6 text-white" />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900 mb-2">Maths Questions</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Create mathematical questions with LaTeX support
+              </p>
+              <div className="text-xs text-gray-500 space-y-1 mb-4">
+                <p>• Single Choice (MCQ)</p>
+                <p>• Multiple Correct Answers</p>
+                <p>• Integer Input</p>
+                <p>• String Matching</p>
+                <p>• KaTeX math rendering</p>
+              </div>
             </div>
-            <h3 className="text-lg font-bold text-gray-900 mb-2">Maths Questions</h3>
-            <p className="text-sm text-gray-600 mb-4">
-              Create mathematical questions with LaTeX support
-            </p>
-            <div className="text-xs text-gray-500 space-y-1">
-              <p>• Single Choice (MCQ)</p>
-              <p>• Multiple Correct Answers</p>
-              <p>• Integer Input</p>
-              <p>• String Matching</p>
-              <p>• KaTeX math rendering</p>
-            </div>
+            <button
+              onClick={() => router.push('/admin/questions/create/maths')}
+              className="mt-auto w-full py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+            >
+              <span>Create Maths</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
           </div>
 
           {/* Web Dev Debug */}
-          <div className="bg-white rounded-xl border-2 border-gray-200 p-6">
-            <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center mb-4">
-              <Globe className="w-6 h-6 text-white" />
+          <div className="bg-white rounded-xl border-2 border-gray-200 p-6 flex flex-col justify-between">
+             <div> 
+              <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center mb-4">
+                <Globe className="w-6 h-6 text-white" />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900 mb-2">Web Dev Debugging</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Create HTML/CSS debugging challenges with live preview
+              </p>
+              <div className="text-xs text-gray-500 space-y-1 mb-4">
+                <p>• Broken HTML/CSS code</p>
+                <p>• Live preview tabs</p>
+                <p>• Requirements list</p>
+                <p>• Hints & solutions</p>
+                <p>• Automatic grading</p>
+              </div>
             </div>
-            <h3 className="text-lg font-bold text-gray-900 mb-2">Web Dev Debugging</h3>
-            <p className="text-sm text-gray-600 mb-4">
-              Create HTML/CSS debugging challenges with live preview
-            </p>
-            <div className="text-xs text-gray-500 space-y-1">
-              <p>• Broken HTML/CSS code</p>
-              <p>• Live preview tabs</p>
-              <p>• Requirements list</p>
-              <p>• Hints & solutions</p>
-              <p>• Automatic grading</p>
-            </div>
+            <button
+              onClick={() => router.push('/admin/questions/create/webdev')}
+              className="mt-auto w-full py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+            >
+              <span>Create Web Dev</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
-        {/* Sample Data Structure */}
+        {/* --- FULL SAMPLE STRUCTURE SECTION --- */}
         <div className="bg-white rounded-xl border-2 border-gray-200 p-6">
           <h3 className="text-lg font-bold text-gray-900 mb-4">Sample Question Structure (Firestore)</h3>
-          
+
           <div className="mb-6">
             <h4 className="font-semibold text-gray-900 mb-2 text-sm">ICP Coding Question:</h4>
             <pre className="bg-gray-50 p-4 rounded-lg text-xs overflow-x-auto">
@@ -247,7 +273,7 @@ See: webdev-challenges/card-layout-challenge/ for complete example`}
             Open Firebase Console
           </button>
           <button
-            onClick={() => router.push('/admin/questions')}
+            onClick={() => router.push('/admin')} // Back to main admin dashboard
             className="flex-1 bg-white border-2 border-gray-300 text-gray-700 px-6 py-3 rounded-xl hover:border-gray-400 transition-all duration-300"
           >
             Cancel
@@ -256,4 +282,4 @@ See: webdev-challenges/card-layout-challenge/ for complete example`}
       </main>
     </div>
   );
-}
+} 
