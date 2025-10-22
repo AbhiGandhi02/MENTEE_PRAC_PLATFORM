@@ -19,6 +19,7 @@ export default function AdminDashboardPage() {
     totalSubmissions: 0,
     totalUsers: 0,
     recentSubmissions: [] as Submission[],
+    userNameMap: {} as { [key: string]: string },
   });
 
   useEffect(() => {
@@ -65,11 +66,27 @@ export default function AdminDashboardPage() {
       const usersSnapshot = await getDocs(collection(db, 'users'));
       const totalUsers = usersSnapshot.size;
 
+      // 1. Get unique user IDs from recent submissions
+      const userIds = [...new Set(recentSubmissions.map(sub => sub.userId))];
+
+      // 2. Fetch user data for these IDs (if there are any)
+      let userNameMap: { [key: string]: string } = {};
+      if (userIds.length > 0) {
+
+        const usersQuery = query(collection(db, 'users'), where('uid', 'in', userIds));
+        const usersSnapshotForNames = await getDocs(usersQuery);
+
+        usersSnapshotForNames.forEach(doc => {
+          userNameMap[doc.id] = doc.data().name || 'Unknown User';
+        });
+      }
+
       setStats({
         totalQuestions,
         totalSubmissions,
         totalUsers,
         recentSubmissions,
+        userNameMap
       });
 
     } catch (error) {
@@ -221,7 +238,7 @@ export default function AdminDashboardPage() {
                     </div>
                     <div>
                       <p className="text-sm font-medium text-gray-900">
-                        {submission.userId.substring(0, 8)}... • {submission.subjectId.toUpperCase()}
+                        {stats.userNameMap[submission.userId] || submission.userId.substring(0, 8)} • {submission.subjectId.toUpperCase()}
                       </p>
                       <p className="text-xs text-gray-600">
                         {submission.type === 'coding' 
