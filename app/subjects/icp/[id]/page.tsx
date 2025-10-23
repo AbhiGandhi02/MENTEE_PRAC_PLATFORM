@@ -308,6 +308,7 @@ export default function ICPQuestionDetailPage() {
               onChange={setCode}
               onSubmit={handleSubmit}
               isSubmitting={isSubmitting}
+              questionStarterCode={content.starterCode}
             />
 
             {/* Submission Result */}
