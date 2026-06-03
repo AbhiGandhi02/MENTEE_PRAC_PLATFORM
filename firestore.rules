@@ -1,0 +1,59 @@
+rules_version = '2';
+
+// Security rules for the Mentee Practice Platform.
+//
+// Model:
+//  - Mentees may READ question metadata (to browse/solve) but NEVER the hidden
+//    test cases — those live in `questionTestCases`, which clients cannot read.
+//  - Submissions are written ONLY by the server (Admin SDK, which bypasses these
+//    rules) after it grades the answer; clients can read their own but cannot
+//    create/modify them, so `isPassed` cannot be forged.
+//  - Admins (a doc in `admins/{uid}`) manage questions + test cases and read all
+//    submissions/users for analytics.
+//
+// Deploy:  firebase deploy --only firestore:rules
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // Question metadata — readable by any signed-in user. Secrets are NOT here.
+    match /questions/{questionId} {
+      allow read:  if signedIn();
+      allow write: if isAdmin();           // admin create/edit/delete (client SDK)
+    }
+
+    // Hidden test cases — admin-only. Mentees are fully denied; the server reads
+    // these via the Admin SDK, which is not subject to these rules.
+    match /questionTestCases/{questionId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Submissions — server-written only; users read their own, admins read all.
+    match /submissions/{submissionId} {
+      allow read: if signedIn()
+        && (isAdmin() || resource.data.userId == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    // User profiles — a user manages their own; admins may read all (analytics).
+    match /users/{uid} {
+      allow read:  if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // Admin registry — a user may check their own admin status; never writable
+    // from the client (manage via console / Admin SDK).
+    match /admins/{uid} {
+      allow read:  if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+  }
+}

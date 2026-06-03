@@ -5,24 +5,53 @@ import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import Header from '@/components/Header';
 import CodeEditor from '@/components/CodeEditor';
-import { doc, getDoc, collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { Question, CodingQuestionContent, CodeLanguage, Submission, CodeEvaluationResult } from '@/lib/types';
 import { Code, Clock, AlertCircle, CheckCircle2, XCircle, Timer, Loader2, X, Eye } from 'lucide-react';
 import { format } from 'date-fns';
 import confetti from 'canvas-confetti';
 
+// Fallback scaffolds used only when a question has no starter code.
+// Your program is run by the judge with the test input on stdin; print the
+// answer to stdout. These read stdin and leave the logic for you to fill in.
 const defaultCodeTemplates: Record<CodeLanguage, string> = {
-  python: '# Write your Python code here\n\ndef solution():\n    pass\n',
-  javascript: '// Write your JavaScript code here\n\nfunction solution() {\n    \n}\n',
-  cpp: '// Write your C++ code here\n\n#include <iostream>\nusing namespace std;\n\nint main() {\n    \n    return 0;\n}\n',
-  java: '// Write your Java code here\n\npublic class Main {\n    public static void main(String[] args) {\n        \n    }\n}\n',
+  python: `import sys
+
+def main():
+    data = sys.stdin.read().split()
+    # TODO: parse the input above and write your solution, then print the output
+    # print(result)
+
+main()
+`,
+  javascript: `const input = require('fs').readFileSync(0, 'utf8').trim();
+const tokens = input.split(/\\s+/);
+// TODO: parse the input above and write your solution, then console.log the output
+`,
+  cpp: `#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+    // TODO: read from cin, write your solution, print the answer to cout
+    return 0;
+}
+`,
+  java: `import java.util.*;
+
+public class Main {
+    public static void main(String[] args) {
+        Scanner sc = new Scanner(System.in);
+        // TODO: read from sc, write your solution, print the answer with System.out
+    }
+}
+`,
 };
 
 export default function ICPQuestionDetailPage() {
   const router = useRouter();
   const params = useParams();
-  const { user, loading } = useAuth();
+  const { user, firebaseUser, loading } = useAuth();
   const [question, setQuestion] = useState<Question | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loadingData, setLoadingData] = useState(true);
@@ -48,8 +77,14 @@ export default function ICPQuestionDetailPage() {
   const loadData = async (preserveCode: boolean = false) => {
     if (!user || !db || !params.id) return;
 
+    // `preserveCode` is the post-submit refresh: only the submissions list needs
+    // updating. Skip the full-page loading spinner so the page (and the result
+    // we just rendered) isn't blanked out and remounted — that looked like a
+    // full page refresh.
+    const silent = preserveCode;
+
     try {
-      setLoadingData(true);
+      if (!silent) setLoadingData(true);
 
       // Fetch question
       const questionDoc = await getDoc(doc(db, 'questions', params.id as string));
@@ -89,7 +124,7 @@ export default function ICPQuestionDetailPage() {
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
-      setLoadingData(false);
+      if (!silent) setLoadingData(false);
     }
   };
 
@@ -104,7 +139,7 @@ export default function ICPQuestionDetailPage() {
   };
 
   const handleSubmit = async (code: string) => {
-    if (!user || !question || !db) return;
+    if (!user || !question || !firebaseUser) return;
 
     setIsSubmitting(true);
     setResult(null);
@@ -112,16 +147,21 @@ export default function ICPQuestionDetailPage() {
     try {
       const startTime = Date.now();
 
-      // Call the API to evaluate code
+      // The server looks up the hidden test cases, runs the judge, computes the
+      // verdict, and writes the submission — the client never sees test cases or
+      // sets isPassed. Send the admin/mentee's ID token for auth.
+      const idToken = await firebaseUser.getIdToken();
       const response = await fetch('/api/evaluate-code', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
         },
         body: JSON.stringify({
+          questionId: question.id,
           code,
           language,
-          testCases: (question.content as CodingQuestionContent).hiddenTestCases,
+          timeSpent: Math.floor((Date.now() - startTime) / 1000),
         }),
       });
 
@@ -130,24 +170,8 @@ export default function ICPQuestionDetailPage() {
       }
 
       const evaluationResult: CodeEvaluationResult = await response.json();
-      const timeSpent = Math.floor((Date.now() - startTime) / 1000);
 
       setResult(evaluationResult);
-
-      // Save submission to Firestore
-      await addDoc(collection(db, 'submissions'), {
-        questionId: question.id,
-        userId: user.uid,
-        subjectId: 'icp',
-        type: 'coding',
-        submittedCode: code,
-        language,
-        result: evaluationResult,
-        submittedAt: serverTimestamp(),
-        isPassed: evaluationResult.status === 'passed',
-        attemptNumber: submissions.length + 1,
-        timeSpent,
-      });
 
       // Show confetti if all tests passed
       if (evaluationResult.status === 'passed') {

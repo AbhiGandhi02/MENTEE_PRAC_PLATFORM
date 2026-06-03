@@ -12,7 +12,7 @@
     "@monaco-editor/react": "^4.7.0",
     "canvas-confetti": "^1.9.3",
     "date-fns": "^4.1.0",
-    "firebase": "^12.4.0",
+    "firebase": "^12.14.0",
     "firebase-admin": "^13.5.0",
     "framer-motion": "^12.23.22",
     "katex": "^0.16.23",

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import Header from '@/components/Header';
 import { Code, Save, AlertCircle, Trash2, Plus } from 'lucide-react';
-import { Timestamp, collection, addDoc, serverTimestamp } from 'firebase/firestore'; 
+import { Timestamp, collection, addDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config'; 
 // import { CodeLanguage } from '@/lib/types'; 
 
@@ -35,7 +35,7 @@ const initialFormData = {
 
 export default function AdminCreateICPPage() {
   const router = useRouter();
-  const { user, isAdmin, loading } = useAuth();
+  const { user, firebaseUser, isAdmin, loading } = useAuth();
   const [formData, setFormData] = useState(initialFormData);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -267,15 +267,17 @@ export default function AdminCreateICPPage() {
            throw new Error("Internal error: No complete hidden test cases found after filtering.");
        }
 
+      // Hidden test cases live in the admin-only `questionTestCases` collection,
+      // NOT in the question doc (which mentees can read). See firestore.rules.
       const questionData = {
         subjectId: formData.subjectId,
         type: formData.type,
         order: formData.order,
         isActive: formData.isActive,
         deadline: deadlineTimestamp,
-        createdAt: serverTimestamp(), 
-        updatedAt: serverTimestamp(), 
-        createdBy: user?.uid || 'unknown-admin', 
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        createdBy: user?.uid || 'unknown-admin',
         content: {
           problemDescription: formData.content.problemDescription.trim(),
           constraints: formData.content.constraints.trim(),
@@ -284,12 +286,18 @@ export default function AdminCreateICPPage() {
           exampleInputs: cleanExampleInputs,
           exampleOutputs: cleanExampleOutputs,
           explanations: cleanExplanations,
-          hiddenTestCases: cleanHiddenTestCases,
-          starterCode: formData.content.starterCode, 
+          starterCode: formData.content.starterCode,
         }
       };
 
       const docRef = await addDoc(collection(db, 'questions'), questionData);
+
+      // Store the hidden test cases separately (admin-only).
+      await setDoc(doc(db, 'questionTestCases', docRef.id), {
+        questionId: docRef.id,
+        testCases: cleanHiddenTestCases,
+        updatedAt: serverTimestamp(),
+      });
 
       alert('Question created successfully!');
       router.push('/admin/questions'); 
@@ -314,15 +322,22 @@ export default function AdminCreateICPPage() {
       return;
     }
 
+    if (!firebaseUser) {
+      setError("You must be signed in as an admin to generate assets.");
+      return;
+    }
+
     setIsGenerating(true);
     setError(null);
 
     try {
+      // Send the admin's Firebase ID token so the server can verify the caller.
+      const idToken = await firebaseUser.getIdToken();
       const response = await fetch('/api/generate-question-assets', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-
+          Authorization: `Bearer ${idToken}`,
         },
         body: JSON.stringify({
           problemDescription: formData.content.problemDescription,

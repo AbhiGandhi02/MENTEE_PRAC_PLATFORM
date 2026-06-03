@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import Header from '@/components/Header';
 import MathRenderer from '@/components/MathRenderer';
-import { doc, getDoc, collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { Question, MCQQuestionContent, MultipleQuestionContent, IntegerQuestionContent, StringQuestionContent, Submission } from '@/lib/types';
 import { Calculator, Clock, CheckCircle2, XCircle, Send, AlertCircle } from 'lucide-react';
@@ -15,7 +15,7 @@ import confetti from 'canvas-confetti';
 export default function MathsQuestionDetailPage() {
   const router = useRouter();
   const params = useParams();
-  const { user, loading } = useAuth();
+  const { user, firebaseUser, loading } = useAuth();
   const [question, setQuestion] = useState<Question | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loadingData, setLoadingData] = useState(true);
@@ -40,11 +40,13 @@ export default function MathsQuestionDetailPage() {
     }
   }, [user, params.id]);
 
-  const loadData = async () => {
+  const loadData = async (silent: boolean = false) => {
     if (!user || !db || !params.id) return;
 
+    // `silent` is the post-submit refresh: skip the full-page loading spinner so
+    // the page (and the result we just rendered) isn't blanked out and remounted.
     try {
-      setLoadingData(true);
+      if (!silent) setLoadingData(true);
 
       // Fetch question
       const questionDoc = await getDoc(doc(db, 'questions', params.id as string));
@@ -78,77 +80,66 @@ export default function MathsQuestionDetailPage() {
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
-      setLoadingData(false);
+      if (!silent) setLoadingData(false);
     }
   };
 
   const handleMCQSubmit = async () => {
-    if (!user || !question || !db || selectedOption === null) return;
-    
-    const content = question.content as MCQQuestionContent;
-    const correct = selectedOption === content.correctAnswer;
-
-    await submitAnswer(selectedOption, correct);
+    if (selectedOption === null) return;
+    await submitAnswer(selectedOption);
   };
 
   const handleMultipleSubmit = async () => {
-    if (!user || !question || !db || selectedOptions.size === 0) return;
-    
-    const content = question.content as MultipleQuestionContent;
-    const selectedArray = Array.from(selectedOptions).sort();
-    const correctArray = content.correctAnswers.sort();
-    const correct = JSON.stringify(selectedArray) === JSON.stringify(correctArray);
-
-    await submitAnswer(selectedArray, correct);
+    if (selectedOptions.size === 0) return;
+    await submitAnswer(Array.from(selectedOptions).sort((a, b) => a - b));
   };
 
   const handleIntegerSubmit = async () => {
-    if (!user || !question || !db || !integerAnswer) return;
-    
-    const content = question.content as IntegerQuestionContent;
+    if (!integerAnswer) return;
     const userAnswer = parseFloat(integerAnswer);
-    const correct = Math.abs(userAnswer - content.correctAnswer) <= (content.tolerance || 0.01);
-
-    await submitAnswer(userAnswer, correct);
+    if (Number.isNaN(userAnswer)) return;
+    await submitAnswer(userAnswer);
   };
 
   const handleStringSubmit = async () => {
-    if (!user || !question || !db || !stringAnswer) return;
-    
-    const content = question.content as StringQuestionContent;
-    let userAnswerProcessed = stringAnswer.trim();
-    let correctAnswerProcessed = content.correctAnswer.trim();
-
-    if (!content.caseSensitive) {
-      userAnswerProcessed = userAnswerProcessed.toLowerCase();
-      correctAnswerProcessed = correctAnswerProcessed.toLowerCase();
-    }
-
-    const correct = userAnswerProcessed === correctAnswerProcessed || 
-      content.acceptableAnswers.some(acceptable => {
-        let processedAcceptable = acceptable.trim();
-        if (!content.caseSensitive) {
-          processedAcceptable = processedAcceptable.toLowerCase();
-        }
-        return userAnswerProcessed === processedAcceptable;
-      });
-
-    await submitAnswer(stringAnswer, correct);
+    if (!stringAnswer) return;
+    await submitAnswer(stringAnswer);
   };
 
-  const submitAnswer = async (answer: any, correct: boolean) => {
-    if (!user || !question || !db) return;
+  // Grading happens SERVER-SIDE (/api/submit-answer) so the verdict can't be
+  // forged from the client; we just render whatever the server returns.
+  const submitAnswer = async (answer: any) => {
+    if (!user || !question || !firebaseUser) return;
 
     setIsSubmitting(true);
 
     try {
       const startTime = Date.now();
+      const idToken = await firebaseUser.getIdToken();
+
+      const response = await fetch('/api/submit-answer', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          questionId: question.id,
+          submittedAnswer: answer,
+          timeSpent: Math.floor((Date.now() - startTime) / 1000),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to submit answer');
+      }
+
+      const { correct } = (await response.json()) as { correct: boolean };
 
       setIsCorrect(correct);
       setShowResult(true);
       setShowExplanation(true);
 
-      // Show confetti if correct
       if (correct) {
         confetti({
           particleCount: 100,
@@ -157,24 +148,8 @@ export default function MathsQuestionDetailPage() {
         });
       }
 
-      const timeSpent = Math.floor((Date.now() - startTime) / 1000);
-
-      // Save submission to Firestore
-      await addDoc(collection(db, 'submissions'), {
-        questionId: question.id,
-        userId: user.uid,
-        subjectId: 'maths',
-        type: question.type,
-        submittedAnswer: answer,
-        result: { correct },
-        submittedAt: serverTimestamp(),
-        isPassed: correct,
-        attemptNumber: submissions.length + 1,
-        timeSpent,
-      });
-
-      // Reload submissions
-      await loadData();
+      // Reload submissions without blanking the page.
+      await loadData(true);
 
     } catch (error) {
       console.error('Error submitting answer:', error);

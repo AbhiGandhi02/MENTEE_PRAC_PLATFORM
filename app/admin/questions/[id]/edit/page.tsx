@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import Header from '@/components/Header';
-import { doc, getDoc, updateDoc, serverTimestamp, Timestamp } from 'firebase/firestore'; // Import Timestamp
+import { doc, getDoc, updateDoc, setDoc, serverTimestamp, Timestamp } from 'firebase/firestore'; // Import Timestamp
 import { db } from '@/lib/firebase/config';
 import { Question, CodeLanguage } from '@/lib/types'; // Make sure types include nested content
 import { Save, ArrowLeft, AlertCircle, Trash2, Plus, Code, Calculator, Globe } from 'lucide-react'; // Added icons
@@ -94,6 +94,17 @@ export default function AdminEditQuestionPage() {
           ...questionDocSnap.data(),
         } as Question;
 
+        // Hidden test cases now live in the admin-only `questionTestCases` doc.
+        // Fall back to any legacy in-content test cases (pre-migration).
+        let loadedTestCases: { input: string; expectedOutput: string }[] | undefined;
+        try {
+          const tcSnap = await getDoc(doc(db, 'questionTestCases', questionId));
+          if (tcSnap.exists()) loadedTestCases = (tcSnap.data() as any).testCases;
+        } catch (e) {
+          console.error('Error loading test cases:', e);
+        }
+        if (!loadedTestCases) loadedTestCases = (questionData.content as any).hiddenTestCases;
+
         // Format deadline from Timestamp to 'YYYY-MM-DDTHH:mm' string for input
         const deadlineDate = questionData.deadline.toDate();
         // Adjust for local timezone offset before slicing to ensure correct time in input
@@ -114,7 +125,7 @@ export default function AdminEditQuestionPage() {
                 exampleInputs: (questionData.content as any).exampleInputs?.length ? (questionData.content as any).exampleInputs : [''],
                 exampleOutputs: (questionData.content as any).exampleOutputs?.length ? (questionData.content as any).exampleOutputs : [''],
                 explanations: (questionData.content as any).explanations?.length ? (questionData.content as any).explanations : [''],
-                hiddenTestCases: (questionData.content as any).hiddenTestCases?.length ? (questionData.content as any).hiddenTestCases : [{ input: '', expectedOutput: '' }],
+                hiddenTestCases: loadedTestCases?.length ? loadedTestCases : [{ input: '', expectedOutput: '' }],
                 // Ensure starterCode object and keys exist
                 starterCode: {
                     ...initialFormStructure.content.starterCode,
@@ -302,6 +313,10 @@ export default function AdminEditQuestionPage() {
            }
       }
 
+      // Build the content WITHOUT hiddenTestCases — those are stored separately
+      // in the admin-only `questionTestCases` collection, never in the public doc.
+      const { hiddenTestCases: _omit, ...contentRest } = formData.content;
+
       // Construct the object with fields to update
       const dataToUpdate: any = { // Use any to avoid strict typing issues with Firestore FieldValue/Timestamp
         order: formData.order,
@@ -310,7 +325,7 @@ export default function AdminEditQuestionPage() {
         updatedAt: serverTimestamp(), // Update modification time
         // Conditionally update content based on type
         content: {
-            ...formData.content, // Spread existing content first
+            ...contentRest, // Spread existing content first (sans hiddenTestCases)
             // Overwrite common/coding fields if present and edited
             problemDescription: formData.content.problemDescription?.trim(),
             // Only include fields relevant to the current type being edited
@@ -321,7 +336,6 @@ export default function AdminEditQuestionPage() {
                 exampleInputs: cleanExampleInputs,
                 exampleOutputs: cleanExampleOutputs,
                 explanations: cleanExplanations,
-                hiddenTestCases: cleanHiddenTestCases,
                 starterCode: formData.content.starterCode,
             }),
             // --- Add similar conditional blocks here for Maths/WebDev content fields ---
@@ -333,6 +347,15 @@ export default function AdminEditQuestionPage() {
       // --- Update Firestore Document ---
       const questionDocRef = doc(db, 'questions', formData.id);
       await updateDoc(questionDocRef, dataToUpdate);
+
+      // Persist hidden test cases to the admin-only collection (coding only).
+      if (formData.type === 'coding') {
+        await setDoc(doc(db, 'questionTestCases', formData.id), {
+          questionId: formData.id,
+          testCases: cleanHiddenTestCases,
+          updatedAt: serverTimestamp(),
+        });
+      }
       // --- End Update ---
 
       alert('Question updated successfully!');

@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { CodeLanguage, CodeEvaluationResult } from '@/lib/types';
+import { CodeLanguage, CodeEvaluationResult, CodingQuestionContent } from '@/lib/types';
 import { addCorsHeaders, handleCorsPreFlight } from '@/lib/middleware/cors';
-
-// Initialize Gemini AI
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+import { requireUser } from '@/lib/middleware/adminAuth';
+import { adminDb } from '@/lib/firebase/admin';
+import { FieldValue } from 'firebase-admin/firestore';
 
 interface TestCase {
   input: string;
@@ -15,7 +14,7 @@ interface EvaluateCodeRequest {
   code: string;
   language: CodeLanguage;
   questionId: string;
-  testCases: TestCase[];
+  timeSpent?: number;
 }
 
 // Handle CORS preflight
@@ -27,122 +26,140 @@ export async function OPTIONS(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const origin = request.headers.get('origin');
   try {
-    const body: EvaluateCodeRequest = await request.json();
-    const { code, language, testCases } = body;
-
-    if (!code || !language || !testCases) {
+    // --- Auth: any signed-in user may submit ---
+    const auth = await requireUser(request);
+    if (!auth) {
       const response = NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'Unauthorized. Please sign in.' },
+        { status: 401 }
+      );
+      return addCorsHeaders(response, origin);
+    }
+
+    const body: EvaluateCodeRequest = await request.json();
+    const { code, language, questionId, timeSpent } = body;
+
+    if (!code || !language || !questionId) {
+      const response = NextResponse.json(
+        { error: 'Missing required fields (code, language, questionId)' },
         { status: 400 }
       );
       return addCorsHeaders(response, origin);
     }
 
-    if (!process.env.GEMINI_API_KEY) {
+    const judgeUrl = process.env.JUDGE_URL;
+    if (!judgeUrl) {
       const response = NextResponse.json(
-        { error: 'Gemini API key not configured' },
+        { error: 'Judge service URL (JUDGE_URL) is not configured' },
         { status: 500 }
       );
       return addCorsHeaders(response, origin);
     }
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-flash-lite-latest' });
+    // --- Load the question + its hidden test cases SERVER-SIDE ---
+    // Test cases are never trusted from the client; they live in the admin-only
+    // `questionTestCases` collection (see firestore.rules).
+    const [questionSnap, testCaseSnap] = await Promise.all([
+      adminDb.collection('questions').doc(questionId).get(),
+      adminDb.collection('questionTestCases').doc(questionId).get(),
+    ]);
 
-    // Create prompt for code evaluation
-    const prompt = `You are a code evaluation system. Evaluate the following ${language} code against the provided test cases.
-
-CODE:
-\`\`\`${language}
-${code}
-\`\`\`
-
-TEST CASES:
-${testCases.map((tc, idx) => `
-Test Case ${idx + 1}:
-Input: ${tc.input}
-Expected Output: ${tc.expectedOutput}
-`).join('\n')}
-
-INSTRUCTIONS:
-1. Execute the code mentally for each test case
-2. Compare the output with the expected output
-3. Check for compilation errors, runtime errors, or logical errors
-4. Estimate execution time (in milliseconds)
-5. Return the result in the following EXACT JSON format (no markdown, no additional text):
-
-{
-  "status": "passed" | "failed" | "compilation_error" | "runtime_error" | "tle",
-  "passedTests": <number>,
-  "totalTests": ${testCases.length},
-  "failedTestCase": {
-    "input": "<input>",
-    "expectedOutput": "<expected>",
-    "actualOutput": "<actual>",
-    "testNumber": <number>
-  } | null,
-  "error": "<error message>" | null,
-  "executionTime": <number in milliseconds>
-}
-
-IMPORTANT:
-- Return ONLY the JSON object, no markdown formatting
-- If all tests pass, set status to "passed" and failedTestCase to null
-- If any test fails, set status to "failed" and include the first failed test case
-- If there's a compilation error, set status to "compilation_error"
-- If there's a runtime error, set status to "runtime_error"
-- If execution takes too long (>5000ms), set status to "tle"
-- The actualOutput should be what the code would actually produce
-`;
-
-    const startTime = Date.now();
-    const result = await model.generateContent(prompt);
-    const executionTime = Date.now() - startTime;
-
-    const responseText = result.response.text();
-    
-    // Clean up the response (remove markdown code blocks if present)
-    let cleanedResponse = responseText.trim();
-    if (cleanedResponse.startsWith('```json')) {
-      cleanedResponse = cleanedResponse.replace(/^```json\n/, '').replace(/\n```$/, '');
-    } else if (cleanedResponse.startsWith('```')) {
-      cleanedResponse = cleanedResponse.replace(/^```\n/, '').replace(/\n```$/, '');
+    if (!questionSnap.exists) {
+      const response = NextResponse.json({ error: 'Question not found' }, { status: 404 });
+      return addCorsHeaders(response, origin);
     }
 
-    let evaluationResult: CodeEvaluationResult;
-    
-    try {
-      evaluationResult = JSON.parse(cleanedResponse);
-      
-      // Validate the response structure
-      if (!evaluationResult.status || typeof evaluationResult.passedTests !== 'number') {
-        throw new Error('Invalid response structure from AI');
-      }
+    const question = questionSnap.data() as {
+      subjectId: string;
+      type: string;
+      isActive?: boolean;
+      content?: CodingQuestionContent;
+    };
 
-      // Use actual execution time if available, otherwise use AI estimate
-      if (evaluationResult.executionTime === undefined) {
-        evaluationResult.executionTime = executionTime;
-      }
-
-    } catch (parseError) {
-      console.error('Failed to parse AI response:', responseText);
-      console.error('Parse error:', parseError);
-      
-      // Fallback: Return a compilation error
-      evaluationResult = {
-        status: 'compilation_error',
-        passedTests: 0,
-        totalTests: testCases.length,
-        error: 'Failed to evaluate code. The AI response was invalid. Please try again.',
-        executionTime,
-      };
+    if (question.isActive === false) {
+      const response = NextResponse.json(
+        { error: 'This question is no longer active.' },
+        { status: 403 }
+      );
+      return addCorsHeaders(response, origin);
     }
 
-    const response = NextResponse.json(evaluationResult);
+    // Prefer the dedicated secret doc; fall back to legacy in-content test cases
+    // (pre-migration) so nothing breaks before the migration runs.
+    const testCases: TestCase[] = testCaseSnap.exists
+      ? ((testCaseSnap.data() as any)?.testCases ?? [])
+      : (question.content?.hiddenTestCases ?? []);
+
+    if (!Array.isArray(testCases) || testCases.length === 0) {
+      const response = NextResponse.json(
+        { error: 'No test cases configured for this question.' },
+        { status: 500 }
+      );
+      return addCorsHeaders(response, origin);
+    }
+
+    // --- Forward to the sandboxed judge ---
+    const judgeResponse = await fetch(`${judgeUrl}/execute`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.JUDGE_SECRET
+          ? { Authorization: `Bearer ${process.env.JUDGE_SECRET}` }
+          : {}),
+      },
+      body: JSON.stringify({ code, language, testCases }),
+      // Generous ceiling: the judge enforces its own per-test limits.
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    if (!judgeResponse.ok) {
+      const detail = await judgeResponse.text().catch(() => '');
+      console.error('Judge service error:', judgeResponse.status, detail);
+      const response = NextResponse.json(
+        {
+          status: 'runtime_error',
+          passedTests: 0,
+          totalTests: testCases.length,
+          error: `Judge service returned ${judgeResponse.status}. Please try again.`,
+          executionTime: 0,
+        } as CodeEvaluationResult,
+        { status: 502 }
+      );
+      return addCorsHeaders(response, origin);
+    }
+
+    const evaluationResult = (await judgeResponse.json()) as CodeEvaluationResult;
+
+    // --- Persist the submission SERVER-SIDE with a server-computed verdict ---
+    // Clients can no longer forge `isPassed`.
+    const isPassed = evaluationResult.status === 'passed';
+    const priorAttempts = await adminDb
+      .collection('submissions')
+      .where('userId', '==', auth.uid)
+      .where('questionId', '==', questionId)
+      .count()
+      .get();
+    const attemptNumber = priorAttempts.data().count + 1;
+
+    await adminDb.collection('submissions').add({
+      questionId,
+      userId: auth.uid,
+      subjectId: question.subjectId ?? 'icp',
+      type: question.type ?? 'coding',
+      submittedCode: code,
+      language,
+      result: evaluationResult,
+      submittedAt: FieldValue.serverTimestamp(),
+      isPassed,
+      attemptNumber,
+      timeSpent: typeof timeSpent === 'number' && timeSpent >= 0 ? timeSpent : 0,
+    });
+
+    const response = NextResponse.json({ ...evaluationResult, attemptNumber });
     return addCorsHeaders(response, origin);
-
   } catch (error) {
     console.error('Error evaluating code:', error);
-    
+
     const response = NextResponse.json(
       {
         status: 'runtime_error',

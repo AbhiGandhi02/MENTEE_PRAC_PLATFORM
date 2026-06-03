@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { addCorsHeaders, handleCorsPreFlight } from '@/lib/middleware/cors';
-// Import admin SDK parts if needed for stricter auth check later
-// import { adminAuth } from '@/lib/firebase/admin'; // Assuming admin.ts is in lib/firebase/
+import { checkAdminAuth } from '@/lib/middleware/adminAuth';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
@@ -42,15 +41,17 @@ export async function POST(request: NextRequest) {
   let response: NextResponse; // Define response variable for CORS
 
   try {
-    // --- Security Check (Basic - NEEDS IMPROVEMENT FOR PRODUCTION) ---
-    // A robust check would verify a Firebase ID token sent in the Authorization header
-    // For now, we assume if the API key is present, it's a valid internal call
-    // or rely on Vercel Function protection if configured.
-    // Replace this with proper admin verification later.
-    const isAuthorized = true; 
-    if (!isAuthorized) {
-       response = NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-       return addCorsHeaders(response, origin);
+    // --- Security Check ---
+    // Verify the caller presents a valid Firebase ID token (Authorization:
+    // Bearer <token>) belonging to a user in the `admins` collection. This
+    // endpoint calls a paid LLM, so it must not be open to unauthenticated use.
+    const { isAdmin } = await checkAdminAuth(request);
+    if (!isAdmin) {
+      response = NextResponse.json(
+        { error: 'Unauthorized. Admin access required.' },
+        { status: 403 }
+      );
+      return addCorsHeaders(response, origin);
     }
 
     const body: GenerationRequestData = await request.json();
@@ -125,7 +126,9 @@ ${exampleOutputs[index]}
 ${explanations && explanations[index] ? `Explanation:\n${explanations[index]}` : ''}
 `).join('\n---\n');
 
-    const prompt = `You are a helpful assistant for creating competitive programming problems. Based on the following problem details, generate LeetCode-style starter code snippets and hidden test cases.
+    const prompt = `You are a helpful assistant for creating competitive programming problems. Based on the following problem details, generate COMPLETE, RUNNABLE starter programs and hidden test cases.
+
+The submissions are graded by a sandbox that runs each program, feeds the test "input" on STANDARD INPUT (stdin), and compares everything the program prints to STANDARD OUTPUT (stdout) against the expected output. So the starter code must be full programs that do real stdin/stdout I/O — NOT LeetCode-style function signatures.
 
 Problem Description:
 ${problemDescription}
@@ -143,8 +146,15 @@ Examples:
 ${examplesString}
 
 INSTRUCTIONS:
-1.  Generate LeetCode-style starter code snippets (just the class or function definition, no input/output handling) for Python, JavaScript, C++, and Java.
-2.  Generate exactly 20 diverse hidden test cases. Include edge cases (empty, single element, max constraints), small cases, typical cases, and potentially tricky cases based on the constraints and examples.
+1.  Generate COMPLETE, COMPILABLE starter programs for Python, JavaScript (Node.js), C++, and Java. Every program MUST:
+    - Read the whole input from stdin exactly as described in the Input Format, and do all the parsing for the student.
+    - Print the answer to stdout exactly as described in the Output Format (no prompts, labels, or debug text — only the required output).
+    - Compile and run as-is, but DO NOT solve the problem. The single function the student must complete MUST contain ONLY a comment "TODO: write your solution here" and a minimal placeholder that lets it compile (Python: pass; C++/Java: return a default/empty value or just return; JavaScript: return). Do NOT implement, outline, pseudo-code, or hint at the algorithm anywhere — leave it empty for the student to write.
+    - Java: the public class MUST be named exactly "Main" (it is compiled as Main.java) and contain "public static void main(String[] args)".
+    - JavaScript: read all of stdin with require('fs').readFileSync(0, 'utf8').
+    - C++: a standard "int main()" that reads from std::cin and writes to std::cout.
+    - Python: read from sys.stdin and call the solution from a top-level entry point.
+2.  Generate exactly 20 diverse hidden test cases. The "input" field is the exact text written to stdin, and "expectedOutput" is the exact text the correct program prints to stdout. Include edge cases (empty, single element, max constraints), small cases, typical cases, and potentially tricky cases based on the constraints and examples.
 3.  Return the results ONLY as a single JSON object in the following exact format (no markdown code blocks, no extra text before or after):
 
 {
